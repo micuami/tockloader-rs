@@ -5,13 +5,16 @@
 mod cli;
 mod display;
 mod errors;
-mod serial;
 
 use cli::make_cli;
 use display::{print_info, print_list};
 use errors::TockloaderError;
-use serial::select_probe;
-use tockloader_lib::{info_probe, install_app, list_probe, tabs::tab::Tab};
+use inquire::Select;
+use tockloader_lib::{
+    connection::{Connection, ConnectionInfo},
+    info, install_app, list, list_debug_probes, list_serial_ports,
+    tabs::tab::Tab,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), TockloaderError> {
@@ -39,63 +42,115 @@ async fn run() -> Result<(), TockloaderError> {
             };
         }
         Some(("list", sub_matches)) => {
-            // TODO(george-cosma):inspect-err
-            let probe = select_probe();
-            match probe {
-                Ok(probe) => {
-                    let mut apps_details = list_probe(
-                        probe,
-                        sub_matches.get_one::<String>("chip").unwrap(),
-                        sub_matches.get_one::<usize>("core").unwrap(),
-                    )
-                    .await;
-                    print_list(&mut apps_details).await;
+            if *sub_matches.get_one::<bool>("serial").unwrap() {
+                let serial_ports = list_serial_ports();
+                // Let the user choose the port that will be used
+                let mut port_names = Vec::new();
+                for port in serial_ports {
+                    port_names.push(port.port_name);
                 }
-                Err(err) => println!("{}", err),
+                // TODO(Micu Ana): Add error handling
+                let ans = Select::new("Which serial port do you want to use?", port_names)
+                    .prompt()
+                    .unwrap();
+                // Open connection
+                let conn = Connection::open(ConnectionInfo::from(ans), None);
+                // Install app
+                let mut apps_details = list(conn.unwrap(), None).await.unwrap();
+                print_list(&mut apps_details).await;
+            } else {
+                // TODO(george-cosma):inspect-err
+                // TODO(Micu Ana): Add error handling
+                let ans = Select::new("Which debug probe do you want to use?", list_debug_probes())
+                    .prompt();
+                // Open connection
+                let conn = Connection::open(
+                    tockloader_lib::connection::ConnectionInfo::ProbeInfo(ans.unwrap()),
+                    Some(sub_matches.get_one::<String>("chip").unwrap().to_string()),
+                );
+
+                let mut apps_details = list(conn.unwrap(), sub_matches.get_one::<usize>("core"))
+                    .await
+                    .unwrap();
+                print_list(&mut apps_details).await;
             }
         }
         Some(("info", sub_matches)) => {
-            let probe = select_probe();
-            match probe {
-                Ok(probe) => {
-                    let mut attributes = info_probe(
-                        probe,
-                        sub_matches.get_one::<String>("chip").unwrap(),
-                        sub_matches.get_one::<usize>("core").unwrap(),
-                    )
-                    .await;
-                    print_info(&mut attributes.apps, &mut attributes.system).await;
+            if *sub_matches.get_one::<bool>("serial").unwrap() {
+                let serial_ports = list_serial_ports();
+                // Let the user choose the port that will be used
+                let mut port_names = Vec::new();
+                for port in serial_ports {
+                    port_names.push(port.port_name);
                 }
-                Err(err) => println!("{}", err),
-            }
-        }
+                // TODO(Micu Ana): Add error handling
+                let ans = Select::new("Which serial port do you want to use?", port_names)
+                    .prompt()
+                    .unwrap();
+                // Open connection
+                let conn = Connection::open(ConnectionInfo::from(ans), None);
+                let mut attributes = info(conn.unwrap(), None).await.unwrap();
+                print_info(&mut attributes.apps, &mut attributes.system).await;
+            } else {
+                // TODO(Micu Ana): Add error handling
+                let ans = Select::new("Which debug probe do you want to use?", list_debug_probes())
+                    .prompt();
+                // Open connection
+                let conn = Connection::open(
+                    tockloader_lib::connection::ConnectionInfo::ProbeInfo(ans.unwrap()),
+                    Some(sub_matches.get_one::<String>("chip").unwrap().to_string()),
+                );
 
-        Some(("install", sub_matches)) => {
-            let probe = select_probe();
-            let tab_file = Tab::new(sub_matches.get_one::<String>("tab").unwrap().to_string());
-            match probe {
-                Ok(probe) => {
-                    install_app(
-                        probe,
-                        sub_matches.get_one::<String>("board").unwrap(),
-                        sub_matches.get_one::<String>("chip").unwrap(),
-                        sub_matches.get_one::<usize>("core").unwrap(),
-                        tab_file,
-                    )
+                let mut attributes = info(conn.unwrap(), sub_matches.get_one::<usize>("core"))
                     .await
                     .unwrap();
-                }
-                Err(err) => println!("{}", err),
+
+                print_info(&mut attributes.apps, &mut attributes.system).await;
             }
         }
-
-        // If only the "--debug" flag is set, then this branch is executed
-        // Or, more likely at this stage, a subcommand hasn't been implemented yet.
+        Some(("install", sub_matches)) => {
+            let tab_file =
+                Tab::open(sub_matches.get_one::<String>("tab").unwrap().to_string()).unwrap();
+            // If "--serial" flag is used, we choose the serial connection
+            if *sub_matches.get_one::<bool>("serial").unwrap() {
+                let serial_ports = list_serial_ports();
+                // Let the user choose the port that will be used
+                let mut port_names = Vec::new();
+                for port in serial_ports {
+                    port_names.push(port.port_name);
+                }
+                // TODO(Micu Ana): Add error handling
+                let ans = Select::new("Which serial port do you want to use?", port_names)
+                    .prompt()
+                    .unwrap();
+                // Open connection
+                let conn = Connection::open(ConnectionInfo::from(ans), None);
+                // Install app
+                install_app(conn.unwrap(), None, tab_file).await.unwrap();
+            } else {
+                // TODO(Micu Ana): Add error handling
+                let ans = Select::new("Which debug probe do you want to use?", list_debug_probes())
+                    .prompt();
+                // Open connection
+                let conn = Connection::open(
+                    tockloader_lib::connection::ConnectionInfo::ProbeInfo(ans.unwrap()),
+                    Some(sub_matches.get_one::<String>("chip").unwrap().to_string()),
+                );
+                // Install app
+                install_app(
+                    conn.unwrap(),
+                    sub_matches.get_one::<usize>("core"),
+                    tab_file,
+                )
+                .await
+                .unwrap();
+            }
+        }
         _ => {
             println!("Could not run the provided subcommand.");
             _ = make_cli().print_help();
         }
     }
-
+    // TODO(Micu Ana): Add error handling
     Ok(())
 }
